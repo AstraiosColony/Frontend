@@ -1,88 +1,63 @@
 <?php
-class User_model extends CI_Model {
-
-    public $status; 
-    public $roles;
-    
-    function __construct(){
-        // Call the Model constructor
-        parent::__construct();        
-        $this->status = $this->config->item('status');
-        $this->roles = $this->config->item('roles');
-    }    
-    
-    public function insertUser($d)
-    {  
-            $string = array(
-                'DisplayName'=>$d['DisplayName'],
-                'username'=>$d['username'],
-                'email'=>$d['email'],
-                'role'=>$this->roles[0], 
-                'active'=>$this->status[0], 
-                'password'=> '', 
-                'last_login'=> ''
-            );
-            $q = $this->db->insert_string('accounts',$string);             
-            $this->db->query($q);
-            return $this->db->insert_id();
-    }
-    
-    public function isDuplicate($email)
-    {     
-        $this->db->get_where('accounts', array('email' => $email), 1);
-        return $this->db->affected_rows() > 0 ? TRUE : FALSE;         
-    }
-    
-    public function insertToken($user_id)
-    {   
-        $token = substr(sha1(rand()), 0, 30); 
-        $date = date('Y-m-d');
-        
-        $string = array(
-                'token'=> $token,
-                'ID'=>$user_id,
-                'created'=>$date
-            );
-        $query = $this->db->insert_string('tokens',$string);
-        $this->db->query($query);
-        return $token . $user_id;
-        
-    }
-    
-    public function isTokenValid($token)
+class User_model extends CI_Model
+{
+    function __construct()
     {
-       $tkn = substr($token,0,30);
-       $uid = substr($token,30);      
-       
-        $q = $this->db->get_where('tokens', array(
-            'tokens.token' => $tkn, 
-            'tokens.user_id' => $uid), 1);                         
-               
-        if($this->db->affected_rows() > 0){
-            $row = $q->row();             
-            
-            $created = $row->created;
-            $createdTS = strtotime($created);
-            $today = date('Y-m-d'); 
-            $todayTS = strtotime($today);
-            
-            if($createdTS != $todayTS){
-                return false;
-            }
-            
-            $user_info = $this->getUserInfo($row->user_id);
-            return $user_info;
-            
-        }else{
-            return false;
+        parent::__construct();
+    }
+    public function get_uuid_by_user($username)
+    {
+        $robust = $this->load->database('', true);
+        $robust->select('UUID');
+        $robust->from('accounts');
+        $robust->where('username', $username);
+        $robust->limit(1);
+        $query = $robust->get();
+        $row   = $query->row();
+        if (isset($row)) {
+            return $row->UUID;
         }
-        
-    }    
-    
-    public function getUserInfo($id)
+    }
+    public function get_hash_by_uuid($uuid)
     {
-        $q = $this->db->get_where('accounts', array('id' => $id), 1);  
-        if($this->db->affected_rows() > 0){
+        $robust = $this->load->database('', true);
+        $robust->select('password');
+        $robust->from('accounts');
+        $robust->where('UUID', $uuid);
+        $robust->limit(1);
+        $query = $robust->get();
+        $row   = $query->row();
+        if (isset($row)) {
+            return $row->password;
+        }
+    }
+    public function check_my_id($hash, $pass)
+    {
+        $try     = md5($pass);
+        // $a2 = md5($attempt);
+        if ($try == $hash) {
+            return TRUE;
+        } else {
+            return FALSE;
+        }
+    }
+    public function login($username, $password)
+    {
+        $uuid = $this->get_uuid_by_user($username);
+        $hash = $this->get_hash_by_uuid($uuid);
+        $valid  = $this->check_my_id($hash, $password);
+        if ($valid == TRUE) {
+            return $uuid;
+        } else {
+            return "FALSE";
+        }
+    }
+    
+  public function getUserInfo($id)
+    {
+	    $robust = $this->load->database('', true);
+        $q = $robust->get_where('accounts', array('uuid' => $id), 1);  
+        if($robust->affected_rows() > 0){
             $row = $q->row();
             return $row;
         }else{
@@ -90,76 +65,10 @@ class User_model extends CI_Model {
             return false;
         }
     }
-    
-    public function updateUserInfo($post)
+    private function uuid()
     {
-        $data = array(
-               'password' => $post['password'],
-               'last_login' => date('Y-m-d h:i:s A'), 
-               'status' => $this->status[1]
-            );
-        $this->db->where('id', $post['user_id']);
-        $this->db->update('accounts', $data); 
-        $success = $this->db->affected_rows(); 
-        
-        if(!$success){
-            error_log('Unable to updateUserInfo('.$post['user_id'].')');
-            return false;
-        }
-        
-        $user_info = $this->getUserInfo($post['user_id']); 
-        return $user_info; 
+        return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff));
     }
-    
-    public function checkLogin($post)
-    {
-        $this->load->library('password');       
-        $this->db->select('*');
-        $this->db->where('email', $post['email']);
-        $query = $this->db->get('users');
-        $userInfo = $query->row();
-        
-        if(!$this->password->validate_password($post['password'], $userInfo->password)){
-            error_log('Unsuccessful login attempt('.$post['email'].')');
-            return false; 
-        }
-        
-        $this->updateLoginTime($userInfo->id);
-        
-        unset($userInfo->password);
-        return $userInfo; 
-    }
-    
-    public function updateLoginTime($id)
-    {
-        $this->db->where('id', $id);
-        $this->db->update('users', array('last_login' => date('Y-m-d h:i:s A')));
-        return;
-    }
-    
-    public function getUserInfoByEmail($email)
-    {
-        $q = $this->db->get_where('users', array('email' => $email), 1);  
-        if($this->db->affected_rows() > 0){
-            $row = $q->row();
-            return $row;
-        }else{
-            error_log('no user found getUserInfo('.$email.')');
-            return false;
-        }
-    }
-    
-    public function updatePassword($post)
-    {   
-        $this->db->where('id', $post['user_id']);
-        $this->db->update('users', array('password' => $post['password'])); 
-        $success = $this->db->affected_rows(); 
-        
-        if(!$success){
-            error_log('Unable to updatePassword('.$post['user_id'].')');
-            return false;
-        }        
-        return true;
-    } 
-    
+          
 }
+?>
